@@ -1,8 +1,12 @@
 import express, { Request, Response } from 'express';
-import { chromium, Browser, BrowserContext, Route, Request as PlaywrightRequest, Page } from 'playwright';
+import { chromium } from 'playwright-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import { Browser, BrowserContext, Route, Request as PlaywrightRequest, Page } from 'playwright';
 import dotenv from 'dotenv';
 import UserAgent from 'user-agents';
 import { getError } from './helpers/get_error';
+
+chromium.use(StealthPlugin());
 
 dotenv.config();
 
@@ -94,7 +98,10 @@ const initializeBrowser = async () => {
       '--disable-accelerated-2d-canvas',
       '--no-first-run',
       '--no-zygote',
-      '--disable-gpu'
+      '--disable-gpu',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--disable-infobars'
     ]
   });
 };
