@@ -9,6 +9,7 @@ import { processJobInternal } from "../services/worker/scrape-worker";
 import { ScrapeJobData } from "../types";
 import { SearchV2Response } from "../lib/entities";
 import type { BillingMetadata } from "../services/billing/types";
+import { getScrapeZDR } from "../lib/zdr-helpers";
 
 export interface DocumentWithCostTracking {
   document: Document;
@@ -37,6 +38,7 @@ interface ScrapeSearchOptions {
   zeroDataRetention?: boolean;
   requestId?: string;
   billing?: BillingMetadata;
+  agentIndexOnly?: boolean;
 }
 
 async function scrapeSearchResultDirect(
@@ -48,7 +50,7 @@ async function scrapeSearchResultDirect(
 ): Promise<DocumentWithCostTracking> {
   const jobId = uuidv7();
   const zeroDataRetention =
-    flags?.forceZDR || (options.zeroDataRetention ?? false);
+    getScrapeZDR(flags) === "forced" || (options.zeroDataRetention ?? false);
 
   logger.debug("Starting direct scrape for search result", {
     scrapeId: jobId,
@@ -77,6 +79,7 @@ async function scrapeSearchResultDirect(
           bypassBilling: options.bypassBilling ?? true,
           zeroDataRetention,
           teamFlags: flags,
+          agentIndexOnly: options.agentIndexOnly ?? false,
         },
         skipNuq: true,
         origin: options.origin,

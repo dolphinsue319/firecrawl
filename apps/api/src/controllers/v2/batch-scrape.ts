@@ -29,6 +29,7 @@ import { checkPermissions } from "../../lib/permissions";
 import { crawlGroup } from "../../services/worker/nuq";
 import { logRequest } from "../../services/logging/log_job";
 import type { BillingMetadata } from "../../services/billing/types";
+import { getScrapeZDR } from "../../lib/zdr-helpers";
 
 export async function batchScrapeController(
   req: RequestWithAuth<{}, BatchScrapeResponse, BatchScrapeRequest>,
@@ -50,7 +51,7 @@ export async function batchScrapeController(
   }
 
   const zeroDataRetention =
-    req.acuc?.flags?.forceZDR || (req.body.zeroDataRetention ?? false);
+    getScrapeZDR(req.acuc?.flags) === "forced" || (req.body.zeroDataRetention ?? false);
 
   if (
     req.body.__agentInterop &&
@@ -159,6 +160,7 @@ export async function batchScrapeController(
             : false,
           zeroDataRetention,
           bypassBilling: !(req.body.__agentInterop?.shouldBill ?? true),
+          agentIndexOnly: (req as any).agentIndexOnly ?? false,
         }, // NOTE: smart wait disabled for batch scrapes to ensure contentful scrape, speed does not matter
         team_id: req.auth.team_id,
         createdAt: Date.now(),

@@ -2,6 +2,7 @@ import {
   ActionsNotSupportedError,
   CrawlDenialError,
   ErrorCodes,
+  MapFailedError,
   MapTimeoutError,
   RacedRedirectError,
   ScrapeJobTimeoutError,
@@ -24,10 +25,12 @@ import {
   SiteError,
   SSLError,
   ProxySelectionError,
+  AgentIndexOnlyError,
   NoCachedDataError,
   ScrapeJobCancelledError,
   ScrapeRetryLimitError,
   BrandingNotSupportedError,
+  AudioUnsupportedUrlError,
 } from "../scraper/scrapeURL/error";
 
 // TODO: figure out correct typing for this
@@ -54,9 +57,12 @@ const errorMap: Record<ErrorCodes, any> = {
   SCRAPE_ACTION_ERROR: ActionError,
   SCRAPE_ACTIONS_NOT_SUPPORTED: ActionsNotSupportedError,
   SCRAPE_BRANDING_NOT_SUPPORTED: BrandingNotSupportedError,
+  AGENT_INDEX_ONLY: AgentIndexOnlyError,
   SCRAPE_RACED_REDIRECT_ERROR: RacedRedirectError,
   SCRAPE_SITEMAP_ERROR: SitemapError,
   CRAWL_DENIAL: CrawlDenialError,
+  SCRAPE_AUDIO_UNSUPPORTED_URL: AudioUnsupportedUrlError,
+  MAP_FAILED: MapFailedError,
 
   // Zod errors
   BAD_REQUEST: null,

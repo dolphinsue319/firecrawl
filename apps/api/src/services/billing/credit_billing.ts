@@ -1,12 +1,6 @@
-import { NotificationType } from "../../types";
 import { withAuth } from "../../lib/withAuth";
-import { sendNotification } from "../notification/email_notification";
-import { supabase_rr_service, supabase_service } from "../supabase";
 import { logger } from "../../lib/logger";
-import * as Sentry from "@sentry/node";
 import { AuthCreditUsageChunk } from "../../controllers/v1/types";
-import { autoCharge } from "./auto_charge";
-import { getValue, setValue } from "../redis";
 import { queueBillingOperation } from "./batch_billing";
 import { autumnService } from "../autumn/autumn.service";
 import { toAutumnBillingProperties, type BillingMetadata } from "./types";
@@ -37,23 +31,32 @@ export async function billTeam(
         ...toAutumnBillingProperties(billing),
         apiKeyId: api_key_id,
       };
-      // Acquire an Autumn lock opportunistically, but never gate usage on it.
-      // billTeam is fire-and-forget at call sites, so this does not block responses.
-      const autumnLockId = await autumnService.lockCredits({
+      const trackedInRequest = await autumnService.trackCredits({
         teamId: team_id,
         value: credits,
         properties: autumnProperties,
+        requestScoped: true,
       });
-      return queueBillingOperation(
+
+      const result = await queueBillingOperation(
         team_id,
         subscription_id,
         credits,
         api_key_id,
         billing,
         false,
-        autumnLockId,
-        autumnProperties,
+        trackedInRequest,
       );
+
+      if (!result.success && trackedInRequest) {
+        await autumnService.refundCredits({
+          teamId: team_id,
+          value: credits,
+          properties: autumnProperties,
+        });
+      }
+
+      return result;
     },
     { success: true, message: "No DB, bypassed." },
   )(team_id, subscription_id, credits, api_key_id, billing, logger);
@@ -76,6 +79,32 @@ export async function checkTeamCredits(
     message: "No DB, bypassed",
     remainingCredits: Infinity,
   })(chunk, team_id, credits);
+}
+
+function evaluateTeamCredits(
+  chunk: AuthCreditUsageChunk,
+  credits: number,
+  isAutoRechargeEnabled: boolean,
+) {
+  const allowOverages = chunk.price_should_be_graceful && isAutoRechargeEnabled;
+  const remainingCredits = allowOverages
+    ? chunk.remaining_credits + chunk.price_credits
+    : chunk.remaining_credits;
+  const creditsWillBeUsed = chunk.adjusted_credits_used + credits;
+  const totalPriceCredits = allowOverages
+    ? (chunk.total_credits_sum ?? 100000000) + chunk.price_credits
+    : (chunk.total_credits_sum ?? 100000000);
+  const creditUsagePercentage =
+    chunk.adjusted_credits_used / (chunk.total_credits_sum ?? 100000000);
+
+  return {
+    allowOverages,
+    remainingCredits,
+    creditsWillBeUsed,
+    totalPriceCredits,
+    creditUsagePercentage,
+    success: creditsWillBeUsed <= totalPriceCredits,
+  };
 }
 
 // if team has enough credits for the operation, return true, else return false
@@ -105,101 +134,96 @@ async function supaCheckTeamCredits(
     };
   }
 
-  let isAutoRechargeEnabled = false,
-    autoRechargeThreshold = 1000;
-  const cacheKey = `team_auto_recharge_${team_id}`;
-  let cachedData = await getValue(cacheKey);
-  if (cachedData) {
-    const parsedData = JSON.parse(cachedData);
-    isAutoRechargeEnabled = parsedData.auto_recharge;
-    autoRechargeThreshold = parsedData.auto_recharge_threshold;
-  } else {
-    const { data, error } = await supabase_rr_service
-      .from("teams")
-      .select("auto_recharge, auto_recharge_threshold")
-      .eq("id", team_id)
-      .single();
+  // Auto-recharge is now handled entirely by Autumn. The legacy ACUC-driven
+  // auto-recharge logic below is disabled to avoid double-charging or firing
+  // at the wrong threshold.
+  //
+  // let isAutoRechargeEnabled = false,
+  //   autoRechargeThreshold = 1000;
+  // const cacheKey = `team_auto_recharge_${team_id}`;
+  // let cachedData = await getValue(cacheKey);
+  // if (cachedData) {
+  //   const parsedData = JSON.parse(cachedData);
+  //   isAutoRechargeEnabled = parsedData.auto_recharge;
+  //   autoRechargeThreshold = parsedData.auto_recharge_threshold;
+  // } else {
+  //   const { data, error } = await supabase_rr_service
+  //     .from("teams")
+  //     .select("auto_recharge, auto_recharge_threshold")
+  //     .eq("id", team_id)
+  //     .single();
+  //
+  //   if (data) {
+  //     isAutoRechargeEnabled = data.auto_recharge;
+  //     autoRechargeThreshold = data.auto_recharge_threshold;
+  //     await setValue(cacheKey, JSON.stringify(data), 300);
+  //   }
+  // }
 
-    if (data) {
-      isAutoRechargeEnabled = data.auto_recharge;
-      autoRechargeThreshold = data.auto_recharge_threshold;
-      await setValue(cacheKey, JSON.stringify(data), 300); // Cache for 5 minutes (300 seconds)
-    }
-  }
+  const {
+    success,
+    remainingCredits,
+    creditsWillBeUsed,
+    totalPriceCredits,
+    creditUsagePercentage,
+  } = evaluateTeamCredits(chunk, credits, false);
 
-  // Graceful billing only applies if the plan supports it AND auto-recharge is enabled
-  const allowOverages = chunk.price_should_be_graceful && isAutoRechargeEnabled;
+  // if (
+  //   config.AUTO_RECHARGE_ENABLED &&
+  //   isAutoRechargeEnabled &&
+  //   chunk.remaining_credits < autoRechargeThreshold &&
+  //   !chunk.is_extract
+  // ) {
+  //   logger.info("Auto-recharge triggered", {
+  //     team_id,
+  //     teamId: team_id,
+  //     autoRechargeThreshold,
+  //     remainingCredits: chunk.remaining_credits,
+  //   });
+  //
+  //   const autoChargeResult = await autoCharge(chunk, autoRechargeThreshold);
+  //
+  //   if (autoChargeResult && autoChargeResult.success) {
+  //     return {
+  //       success: true,
+  //       message: autoChargeResult.message,
+  //       remainingCredits: allowOverages
+  //         ? autoChargeResult.remainingCredits + chunk.price_credits
+  //         : autoChargeResult.remainingCredits,
+  //       chunk: autoChargeResult.chunk,
+  //     };
+  //   } else if (allowOverages) {
+  //     return {
+  //       success: true,
+  //       message: "Auto-recharge failed, but price should be graceful",
+  //       remainingCredits,
+  //       chunk,
+  //     };
+  //   }
+  // }
 
-  const remainingCredits = allowOverages
-    ? chunk.remaining_credits + chunk.price_credits
-    : chunk.remaining_credits;
-
-  const creditsWillBeUsed = chunk.adjusted_credits_used + credits;
-
-  // In case chunk.price_credits is undefined, set it to a large number to avoid mistakes
-  const totalPriceCredits = allowOverages
-    ? (chunk.total_credits_sum ?? 100000000) + chunk.price_credits
-    : (chunk.total_credits_sum ?? 100000000);
-
-  // Removal of + credits
-  const creditUsagePercentage =
-    chunk.adjusted_credits_used / (chunk.total_credits_sum ?? 100000000);
-
-  if (
-    isAutoRechargeEnabled &&
-    chunk.remaining_credits < autoRechargeThreshold &&
-    !chunk.is_extract
-  ) {
-    logger.info("Auto-recharge triggered", {
-      team_id,
-      teamId: team_id,
-      autoRechargeThreshold,
-      remainingCredits: chunk.remaining_credits,
-    });
-
-    const autoChargeResult = await autoCharge(chunk, autoRechargeThreshold);
-
-    if (autoChargeResult && autoChargeResult.success) {
-      return {
-        success: true,
-        message: autoChargeResult.message,
-        remainingCredits: allowOverages
-          ? autoChargeResult.remainingCredits + chunk.price_credits
-          : autoChargeResult.remainingCredits,
-        chunk: autoChargeResult.chunk,
-      };
-    } else if (allowOverages) {
-      return {
-        success: true,
-        message: "Auto-recharge failed, but price should be graceful",
-        remainingCredits,
-        chunk,
-      };
-    }
-  }
-
-  // Only notify if their actual credits (not what they will use) used is greater than the total price credits
-  if (chunk.adjusted_credits_used > (chunk.total_credits_sum ?? 100000000)) {
-    sendNotification(
-      team_id,
-      NotificationType.LIMIT_REACHED,
-      chunk.sub_current_period_start,
-      chunk.sub_current_period_end,
-      chunk,
-    );
-  } else if (creditUsagePercentage >= 0.8 && creditUsagePercentage < 1) {
-    // Send email notification for approaching credit limit
-    sendNotification(
-      team_id,
-      NotificationType.APPROACHING_LIMIT,
-      chunk.sub_current_period_start,
-      chunk.sub_current_period_end,
-      chunk,
-    );
-  }
+  // TODO: Re-enable credit notifications once they are derived from Autumn balances
+  // instead of ACUC, which is no longer the source of truth.
+  // if (chunk.adjusted_credits_used > (chunk.total_credits_sum ?? 100000000)) {
+  //   sendNotification(
+  //     team_id,
+  //     NotificationType.LIMIT_REACHED,
+  //     chunk.sub_current_period_start,
+  //     chunk.sub_current_period_end,
+  //     chunk,
+  //   );
+  // } else if (creditUsagePercentage >= 0.8 && creditUsagePercentage < 1) {
+  //   sendNotification(
+  //     team_id,
+  //     NotificationType.APPROACHING_LIMIT,
+  //     chunk.sub_current_period_start,
+  //     chunk.sub_current_period_end,
+  //     chunk,
+  //   );
+  // }
 
   // Compare the adjusted total credits used with the credits allowed by the plan (and graceful)
-  if (creditsWillBeUsed > totalPriceCredits) {
+  if (!success) {
     logger.warn("Credit check failed - insufficient credits", {
       team_id,
       teamId: team_id,
@@ -207,7 +231,6 @@ async function supaCheckTeamCredits(
       is_extract: chunk.is_extract,
       bypassCreditChecks: chunk.flags?.bypassCreditChecks,
       price_should_be_graceful: chunk.price_should_be_graceful,
-      allowOverages,
       price_credits: chunk.price_credits,
       coupon_credits: chunk.coupon_credits,
       total_credits_sum: chunk.total_credits_sum,
@@ -221,8 +244,6 @@ async function supaCheckTeamCredits(
       computed_totalPriceCredits: totalPriceCredits,
       creditUsagePercentage,
       sumComponents: chunk.price_credits + chunk.coupon_credits,
-      isAutoRechargeEnabled,
-      autoRechargeThreshold,
     });
     return {
       success: false,
@@ -236,7 +257,7 @@ async function supaCheckTeamCredits(
   return {
     success: true,
     message: "Sufficient credits available",
-    remainingCredits: chunk.remaining_credits,
+    remainingCredits,
     chunk,
   };
 }

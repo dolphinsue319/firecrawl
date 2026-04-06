@@ -25,6 +25,7 @@ import { deepResearchController } from "../controllers/v1/deep-research";
 import { deepResearchStatusController } from "../controllers/v1/deep-research-status";
 import { tokenUsageController } from "../controllers/v1/token-usage";
 import { ongoingCrawlsController } from "../controllers/v1/crawl-ongoing";
+import { fireclawController } from "../controllers/v1/fireclaw";
 import {
   authMiddleware,
   checkCreditsMiddleware,
@@ -36,6 +37,7 @@ import {
 } from "./shared";
 import { queueStatusController } from "../controllers/v1/queue-status";
 import { creditUsageHistoricalController } from "../controllers/v1/credit-usage-historical";
+
 import { tokenUsageHistoricalController } from "../controllers/v1/token-usage-historical";
 import {
   paymentMiddleware,
@@ -281,33 +283,40 @@ v1Router.delete(
 // v1Router.get("/health/liveness", livenessController);
 // v1Router.get("/health/readiness", readinessController);
 
+v1Router.post(
+  "/fireclaw",
+  authMiddleware(RateLimiterMode.Scrape),
+  checkCreditsMiddleware(100),
+  wrap(fireclawController),
+);
+
 v1Router.get(
   "/team/credit-usage",
-  authMiddleware(RateLimiterMode.CrawlStatus),
+  authMiddleware(RateLimiterMode.Account),
   wrap(creditUsageController),
 );
 
 v1Router.get(
   "/team/credit-usage/historical",
-  authMiddleware(RateLimiterMode.CrawlStatus),
+  authMiddleware(RateLimiterMode.Account),
   wrap(creditUsageHistoricalController),
 );
 
 v1Router.get(
   "/team/token-usage",
-  authMiddleware(RateLimiterMode.ExtractStatus),
+  authMiddleware(RateLimiterMode.Account),
   wrap(tokenUsageController),
 );
 
 v1Router.get(
   "/team/token-usage/historical",
-  authMiddleware(RateLimiterMode.ExtractStatus),
+  authMiddleware(RateLimiterMode.Account),
   wrap(tokenUsageHistoricalController),
 );
 
 v1Router.get(
   "/team/queue-status",
-  authMiddleware(RateLimiterMode.CrawlStatus),
+  authMiddleware(RateLimiterMode.Account),
   wrap(queueStatusController),
 );
 

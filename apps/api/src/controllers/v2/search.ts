@@ -19,6 +19,7 @@ import {
 } from "../../services/sentry";
 import { executeSearch } from "../../search/execute";
 import type { BillingMetadata } from "../../services/billing/types";
+import { getSearchZDR } from "../../lib/zdr-helpers";
 
 export async function searchController(
   req: RequestWithAuth<{}, SearchResponse, SearchRequest>,
@@ -34,10 +35,10 @@ export async function searchController(
     teamId: req.auth.team_id,
     module: "api/v2",
     method: "searchController",
-    zeroDataRetention: req.acuc?.flags?.forceZDR,
+    zeroDataRetention: getSearchZDR(req.acuc?.flags) === "forced",
   });
 
-  if (req.acuc?.flags?.forceZDR) {
+  if (getSearchZDR(req.acuc?.flags) === "forced") {
     return res.status(400).json({
       success: false,
       error:
@@ -89,6 +90,18 @@ export async function searchController(
     zeroDataRetention = isZDROrAnon ?? false;
     applyZdrScope(isZDROrAnon ?? false);
 
+    // Verify the team has searchZDR enabled before allowing enterprise ZDR/anon
+    if (isZDROrAnon) {
+      const searchMode = getSearchZDR(req.acuc?.flags);
+      if (searchMode !== "allowed" && searchMode !== "forced") {
+        return res.status(403).json({
+          success: false,
+          error:
+            "Zero Data Retention (ZDR) search is not enabled for your team. Contact support@firecrawl.com to enable this feature.",
+        });
+      }
+    }
+
     if (!agentRequestId) {
       await logRequest({
         id: jobId,
@@ -124,9 +137,11 @@ export async function searchController(
         apiKeyId: req.acuc?.api_key_id ?? null,
         flags: req.acuc?.flags ?? null,
         requestId: agentRequestId ?? jobId,
+        jobId,
         bypassBilling: !shouldBill,
         zeroDataRetention: isZDROrAnon,
         billing,
+        agentIndexOnly: (req as any).agentIndexOnly ?? false,
       },
       logger,
     );

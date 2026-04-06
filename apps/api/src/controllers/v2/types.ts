@@ -419,7 +419,8 @@ export type FormatObject =
   | ScreenshotFormatWithOptions
   | AttributesFormatWithOptions
   | QueryFormatWithOptions
-  | { type: "branding" };
+  | { type: "branding" }
+  | { type: "audio" };
 
 const pdfModeSchema = z.enum(["fast", "auto", "ocr"]);
 
@@ -528,6 +529,7 @@ const baseScrapeOptions = z.strictObject({
           attributesFormatWithOptions,
           z.strictObject({ type: z.literal("branding") }),
           queryFormatWithOptions,
+          z.strictObject({ type: z.literal("audio") }),
         ])
         .array()
         .optional()
@@ -571,6 +573,14 @@ const baseScrapeOptions = z.strictObject({
   maxAge: z.int().gte(0).optional(),
   minAge: z.int().gte(0).optional(),
   storeInCache: z.boolean().prefault(true),
+
+  profile: z
+    .object({
+      name: z.string().min(1).max(128),
+      saveChanges: z.boolean().default(true),
+    })
+    .optional(),
+
   // @deprecated
   __searchPreviewToken: z.string().optional(),
   __experimental_omce: z.boolean().prefault(false).optional(),
@@ -997,6 +1007,7 @@ export type Document = {
   links?: string[];
   images?: string[];
   screenshot?: string;
+  audio?: string;
   extract?: any;
   json?: any;
   summary?: string;
@@ -1104,6 +1115,8 @@ export type ErrorResponse = {
   code?: ErrorCodes;
   error: string;
   details?: any;
+  sponsor_status?: string;
+  login_url?: string;
 };
 
 export type ScrapeResponse =
@@ -1276,6 +1289,7 @@ export type CrawlErrorsResponse =
 
 type AuthObject = {
   team_id: string;
+  org_id?: string | null;
 };
 
 type Account = {
@@ -1287,12 +1301,15 @@ export type TeamFlags = {
   unblockedDomains?: string[];
   forceZDR?: boolean;
   allowZDR?: boolean;
+  scrapeZDR?: "disabled" | "allowed" | "forced";
+  searchZDR?: "disabled" | "allowed" | "forced";
   zdrCost?: number;
   checkRobotsOnScrape?: boolean;
   crawlTtlHours?: number;
   ipWhitelist?: boolean;
   bypassCreditChecks?: boolean;
   debugBranding?: boolean;
+  maxBrowserSessions?: number;
 } | null;
 
 interface RequestWithMaybeACUC<

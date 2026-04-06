@@ -1081,6 +1081,8 @@ export type ErrorResponse = {
   code?: ErrorCodes;
   error: string;
   details?: any;
+  sponsor_status?: string;
+  login_url?: string;
 };
 
 export type ScrapeResponse =
@@ -1219,6 +1221,7 @@ export type CrawlErrorsResponse =
 
 type AuthObject = {
   team_id: string;
+  org_id?: string | null;
 };
 
 type Account = {
@@ -1229,6 +1232,7 @@ export type AuthCreditUsageChunk = {
   api_key: string;
   api_key_id: number;
   team_id: string;
+  org_id?: string | null;
   sub_id: string | null;
   sub_current_period_start: string | null;
   sub_current_period_end: string | null;
@@ -1259,6 +1263,7 @@ export type AuthCreditUsageChunk = {
     scrapeAgentPreview?: number;
     browser?: number;
     browserExecute?: number;
+    account?: number;
   };
   concurrency: number;
   flags: TeamFlags;
@@ -1279,6 +1284,8 @@ export type TeamFlags = {
   unblockedDomains?: string[];
   forceZDR?: boolean;
   allowZDR?: boolean;
+  scrapeZDR?: "disabled" | "allowed" | "forced";
+  searchZDR?: "disabled" | "allowed" | "forced";
   zdrCost?: number;
   checkRobotsOnScrape?: boolean;
   crawlTtlHours?: number;
@@ -1287,6 +1294,7 @@ export type TeamFlags = {
   browserBeta?: boolean;
   bypassCreditChecks?: boolean;
   debugBranding?: boolean;
+  maxBrowserSessions?: number;
 } | null;
 
 export type AuthCreditUsageChunkFromTeam = Omit<
