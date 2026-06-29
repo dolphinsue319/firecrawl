@@ -67,14 +67,65 @@ final class FirecrawlHttpClient
         return $this->request('DELETE', $this->baseUrl . $path);
     }
 
+    /**
+     * @param array<string, mixed> $body
+     * @return array<string, mixed>
+     */
+    public function patch(string $path, array $body): array
+    {
+        return $this->request('PATCH', $this->baseUrl . $path, $body);
+    }
+
+    /**
+     * Send a POST request with a multipart/form-data body.
+     *
+     * @param array<string, string> $fields
+     * @return array<string, mixed>
+     */
+    public function postMultipart(
+        string $path,
+        array $fields,
+        string $fileField,
+        string $fileName,
+        string $fileContent,
+        ?string $fileContentType = null,
+    ): array {
+        $multipart = [];
+        foreach ($fields as $name => $value) {
+            $multipart[] = [
+                'name' => $name,
+                'contents' => $value,
+            ];
+        }
+
+        $filePart = [
+            'name' => $fileField,
+            'contents' => $fileContent,
+            'filename' => $fileName,
+        ];
+        if ($fileContentType !== null && $fileContentType !== '') {
+            $filePart['headers'] = ['Content-Type' => $fileContentType];
+        }
+        $multipart[] = $filePart;
+
+        return $this->request(
+            'POST',
+            $this->baseUrl . $path,
+            body: [],
+            extraHeaders: [],
+            multipart: $multipart,
+        );
+    }
+
     public function getBaseUrl(): string
     {
         return $this->baseUrl;
     }
 
     /**
-     * @param array<string, mixed>  $body
-     * @param array<string, string> $extraHeaders
+     * @param array<string, mixed>                  $body
+     * @param array<string, string>                 $extraHeaders
+     * @param list<array<string, mixed>>|null       $multipart
      * @return array<string, mixed>
      */
     private function request(
@@ -82,20 +133,32 @@ final class FirecrawlHttpClient
         string $url,
         array $body = [],
         array $extraHeaders = [],
+        ?array $multipart = null,
     ): array {
-        $headers = array_merge([
-            'Authorization' => 'Bearer ' . $this->apiKey,
-            'Content-Type' => 'application/json',
+        $defaultHeaders = [
             'Accept' => 'application/json',
             'User-Agent' => 'firecrawl-php/' . Version::SDK_VERSION,
-        ], $extraHeaders);
+        ];
+        // Omit the Authorization header entirely when no key is set so that
+        // scrape/search/interact can use the keyless free tier.
+        if ($this->apiKey !== '') {
+            $defaultHeaders['Authorization'] = 'Bearer ' . $this->apiKey;
+        }
+
+        if ($multipart === null) {
+            $defaultHeaders['Content-Type'] = 'application/json';
+        }
+
+        $headers = array_merge($defaultHeaders, $extraHeaders);
 
         $options = [
             RequestOptions::HEADERS => $headers,
             RequestOptions::HTTP_ERRORS => false,
         ];
 
-        if ($method === 'POST' && $body !== []) {
+        if ($multipart !== null) {
+            $options[RequestOptions::MULTIPART] = $multipart;
+        } elseif (($method === 'POST' || $method === 'PATCH') && $body !== []) {
             $options[RequestOptions::JSON] = $body;
         }
 

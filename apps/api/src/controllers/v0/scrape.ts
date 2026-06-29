@@ -1,6 +1,6 @@
 import { ExtractorOptions, PageOptions } from "./../../lib/entities";
 import { Request, Response } from "express";
-import { checkTeamCredits } from "../../services/billing/credit_billing";
+import { autumnService } from "../../services/autumn/autumn.service";
 import { authenticateUser } from "../auth";
 import { RateLimiterMode, AuthResponse } from "../../types";
 import { TeamFlags, toLegacyDocument, url as urlSchema } from "../v1/types";
@@ -22,10 +22,11 @@ import { Document as V0Document } from "./../../lib/entities";
 import { UNSUPPORTED_SITE_MESSAGE } from "../../lib/strings";
 import { fromV0Combo } from "../v2/types";
 import { ScrapeJobTimeoutError } from "../../lib/error";
-import { scrapeQueue } from "../../services/worker/nuq";
+import { scrapeQueue } from "../../services/worker/nuq-router";
 import { getErrorContactMessage } from "../../lib/deployment";
 import { logRequest } from "../../services/logging/log_job";
 import { getScrapeZDR } from "../../lib/zdr-helpers";
+import { applyAgentAuthDiscoveryHeader } from "../../lib/agent-auth-discovery";
 
 async function scrapeHelper(
   jobId: string,
@@ -62,7 +63,12 @@ async function scrapeHelper(
     return { success: false, error: "Url is required", returnCode: 400 };
   }
 
-  if (isUrlBlocked(url, flags)) {
+  if (
+    isUrlBlocked(url, flags, {
+      team_id,
+      origin: req.body?.origin ?? null,
+    })
+  ) {
     return {
       success: false,
       error: UNSUPPORTED_SITE_MESSAGE,
@@ -181,6 +187,7 @@ export async function scrapeController(req: Request, res: Response) {
     // make sure to authenticate user first, Bearer <token>
     const auth = await authenticateUser(req, res, RateLimiterMode.Scrape);
     if (!auth.success) {
+      if (auth.status === 401) applyAgentAuthDiscoveryHeader(res);
       return res.status(auth.status).json({ error: auth.error });
     }
 
@@ -247,11 +254,15 @@ export async function scrapeController(req: Request, res: Response) {
       timeout = req.body.timeout ?? 90000;
     }
 
-    // checkCredits
+    // checkCredits — Autumn is the source of truth for credits.
     try {
-      const { success: creditsCheckSuccess, message: creditsCheckMessage } =
-        await checkTeamCredits(chunk, team_id, 1);
-      if (!creditsCheckSuccess) {
+      const autumnResult = await autumnService.checkCredits({
+        teamId: team_id,
+        value: 1,
+        properties: { source: "v0/scrape" },
+      });
+      // null = Autumn unavailable / self-hosted -> fail open, matching v1/v2.
+      if (autumnResult !== null && !autumnResult.allowed) {
         earlyReturn = true;
         return res.status(402).json({
           error:
